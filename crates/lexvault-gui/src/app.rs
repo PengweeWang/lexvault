@@ -435,8 +435,6 @@ impl LexVaultGui {
 
 impl Render for LexVaultGui {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        #[cfg(target_os = "windows")]
-        let window = _window;
         let colors = cx.theme().colors.clone();
         let setup = self.dictionary.is_none();
         let history = self.history.clone();
@@ -514,12 +512,12 @@ impl Render for LexVaultGui {
 
 #[cfg(target_os = "windows")]
 fn set_always_on_top(window: &Window, enabled: bool) -> bool {
-    use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+    use raw_window_handle::RawWindowHandle;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos,
     };
 
-    let Ok(handle) = window.window_handle() else {
+    let Ok(handle) = raw_window_handle::HasWindowHandle::window_handle(window) else {
         return false;
     };
     let RawWindowHandle::Win32(handle) = handle.as_raw() else {
