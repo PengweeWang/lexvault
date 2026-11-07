@@ -128,7 +128,9 @@ list reaches its end.
 On Windows the GUI starts without a console window and draws its own title bar
 with minimize, maximize and close controls. The pin button toggles
 always-on-top. The candidate column and definition column both scroll with the
-mouse wheel.
+mouse wheel. Dictionary searches and definition reads run on a dedicated
+background thread so typing never waits for SQLite; stale responses from older
+keystrokes are discarded.
 
 If the database is missing, the window shows the converter command and exact
 destination path instead of exiting silently. After adding the database, press

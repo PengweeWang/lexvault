@@ -1,3 +1,8 @@
+use std::{
+    sync::mpsc::{self, Sender},
+    time::Duration,
+};
+
 use ely_core::{
     buttons::Button,
     forms::{InputEvent, SearchInput, TextInput},
@@ -12,12 +17,15 @@ use ely_core::{
 use ely_core::{buttons::IconButton, primitives::IconName};
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
-    ParentElement, Render, StatefulInteractiveElement, Styled, Subscription, Window, div,
+    ParentElement, Render, StatefulInteractiveElement, Styled, Subscription, Task, Window, div,
     prelude::FluentBuilder as _, px, relative,
 };
 use lexvault_core::{DataManager, DataPaths, Entry, LexVault, SearchCursor, Suggestion};
 
-use crate::{SelectNext, SelectPrevious};
+use crate::{
+    SelectNext, SelectPrevious,
+    worker::{DictionaryWorker, Request, Response},
+};
 
 pub(crate) const KEY_CONTEXT: &str = "LexVault";
 pub(crate) const SEARCH_CONTEXT: &str = "ElyInput";
@@ -27,10 +35,15 @@ const MAX_HISTORY: usize = 20;
 pub(crate) struct LexVaultGui {
     focus: FocusHandle,
     search: Entity<TextInput>,
-    dictionary: Option<LexVault>,
+    worker: Option<DictionaryWorker>,
+    responses: Sender<Response>,
     expected_database: String,
     setup_error: Option<String>,
     query: String,
+    query_epoch: u64,
+    selection_epoch: u64,
+    loading_search: bool,
+    loading_more: bool,
     items: Vec<Suggestion>,
     cursor: Option<SearchCursor>,
     exhausted: bool,
@@ -41,6 +54,7 @@ pub(crate) struct LexVaultGui {
     #[cfg(target_os = "windows")]
     always_on_top: bool,
     _search_events: Subscription,
+    _worker_events: Task<()>,
 }
 
 impl LexVaultGui {
@@ -55,14 +69,36 @@ impl LexVaultGui {
             InputEvent::Submit => this.remember_query(cx),
             InputEvent::Focus | InputEvent::Blur => {}
         });
+        let (responses, response_events) = mpsc::channel();
+        let worker_events = cx.spawn_in(window, async move |this, cx| {
+            loop {
+                let incoming = response_events.try_iter().collect::<Vec<_>>();
+                if !incoming.is_empty() {
+                    let updated = cx.update(|_, cx| {
+                        this.update(cx, |this, cx| this.handle_responses(incoming, cx))
+                    });
+                    if updated.and_then(|inner| inner).is_err() {
+                        return;
+                    }
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(8))
+                    .await;
+            }
+        });
 
         let mut this = Self {
             focus: cx.focus_handle(),
             search,
-            dictionary: None,
+            worker: None,
+            responses,
             expected_database: String::new(),
             setup_error: None,
             query: String::new(),
+            query_epoch: 0,
+            selection_epoch: 0,
+            loading_search: false,
+            loading_more: false,
             items: Vec::new(),
             cursor: None,
             exhausted: false,
@@ -73,6 +109,7 @@ impl LexVaultGui {
             #[cfg(target_os = "windows")]
             always_on_top: false,
             _search_events: search_events,
+            _worker_events: worker_events,
         };
         this.open_dictionary();
         window.focus(&this.search.read(cx).focus().clone(), cx);
@@ -85,27 +122,34 @@ impl LexVaultGui {
         let manager = DataManager::new(paths);
         match manager.ensure_ready(|_| {}) {
             Ok(path) => match LexVault::open(path) {
-                Ok(dictionary) => {
-                    self.dictionary = Some(dictionary);
-                    self.setup_error = None;
-                    self.status.clear();
-                }
+                Ok(dictionary) => match DictionaryWorker::spawn(dictionary, self.responses.clone())
+                {
+                    Ok(worker) => {
+                        self.worker = Some(worker);
+                        self.setup_error = None;
+                        self.status.clear();
+                    }
+                    Err(error) => {
+                        self.worker = None;
+                        self.setup_error = Some(format!("无法启动词典查询线程：{error}"));
+                    }
+                },
                 Err(error) => {
-                    self.dictionary = None;
+                    self.worker = None;
                     self.setup_error = Some(error.to_string());
                 }
             },
             Err(error) => {
-                self.dictionary = None;
+                self.worker = None;
                 self.setup_error = Some(error.to_string());
             }
         }
     }
 
     fn reload_dictionary(&mut self, cx: &mut Context<Self>) {
-        self.dictionary = None;
+        self.worker = None;
         self.open_dictionary();
-        if self.dictionary.is_some() {
+        if self.worker.is_some() {
             self.refresh(cx);
         } else {
             cx.notify();
@@ -114,8 +158,11 @@ impl LexVaultGui {
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
         let query = self.search.read(cx).text().trim().to_owned();
-        let changed = query != self.query;
         self.query = query;
+        self.query_epoch = self.query_epoch.wrapping_add(1);
+        self.selection_epoch = self.selection_epoch.wrapping_add(1);
+        self.loading_search = false;
+        self.loading_more = false;
         self.items.clear();
         self.cursor = None;
         self.exhausted = false;
@@ -123,46 +170,55 @@ impl LexVaultGui {
         self.entry = None;
         self.status.clear();
 
-        if self.dictionary.is_none() || self.query.is_empty() {
+        if self.worker.is_none() || self.query.is_empty() {
             self.exhausted = self.query.is_empty();
             cx.notify();
             return;
         }
 
-        self.load_more();
-        if !self.items.is_empty() {
-            self.select_index(0, cx);
+        let sent = self.worker.as_ref().is_some_and(|worker| {
+            worker.send(Request::Search {
+                query_epoch: self.query_epoch,
+                query: self.query.clone(),
+                cursor: None,
+                page_size: PAGE_SIZE,
+                append: false,
+            })
+        });
+        if sent {
+            self.loading_search = true;
+        } else {
+            self.status = "无法提交词典查询".to_owned();
+            self.exhausted = true;
         }
-        if changed {
-            cx.notify();
-        }
+        cx.notify();
     }
 
-    fn load_more(&mut self) {
-        if self.exhausted {
+    fn load_more(&mut self, cx: &mut Context<Self>) {
+        if self.exhausted || self.loading_search || self.loading_more {
             return;
         }
-        let (Some(dictionary), false) = (&self.dictionary, self.query.is_empty()) else {
+        if self.worker.is_none() || self.query.is_empty() {
             self.exhausted = true;
             return;
-        };
-
-        match dictionary.search_page(&self.query, self.cursor.as_ref(), PAGE_SIZE) {
-            Ok(page) => {
-                let before = self.items.len();
-                self.items.extend(page.items);
-                self.cursor = page.next_cursor;
-                self.exhausted = page.exhausted;
-                if self.items.len() == before && !page.exhausted {
-                    self.status = "分页查询没有取得新词条".to_owned();
-                    self.exhausted = true;
-                }
-            }
-            Err(error) => {
-                self.status = error.to_string();
-                self.exhausted = true;
-            }
         }
+
+        let sent = self.worker.as_ref().is_some_and(|worker| {
+            worker.send(Request::Search {
+                query_epoch: self.query_epoch,
+                query: self.query.clone(),
+                cursor: self.cursor.clone(),
+                page_size: PAGE_SIZE,
+                append: true,
+            })
+        });
+        if sent {
+            self.loading_more = true;
+        } else {
+            self.status = "无法提交分页查询".to_owned();
+            self.exhausted = true;
+        }
+        cx.notify();
     }
 
     fn select_index(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -171,13 +227,20 @@ impl LexVaultGui {
         };
         let id = suggestion.id;
         self.selected = index;
+        self.selection_epoch = self.selection_epoch.wrapping_add(1);
         self.status.clear();
-        self.entry = self
-            .dictionary
-            .as_ref()
-            .and_then(|dictionary| dictionary.lookup_by_id(id).ok().flatten());
-        if self.entry.is_none() {
-            self.status = format!("无法读取词条：{}", suggestion.word);
+        let word = suggestion.word.clone();
+        let sent = self.worker.as_ref().is_some_and(|worker| {
+            worker.send(Request::Lookup {
+                selection_epoch: self.selection_epoch,
+                id,
+            })
+        });
+        if sent {
+            self.entry = None;
+        } else {
+            self.entry = None;
+            self.status = format!("无法读取词条：{word}");
         }
         cx.notify();
     }
@@ -187,7 +250,7 @@ impl LexVaultGui {
             return;
         }
         if self.selected + 1 >= self.items.len() {
-            self.load_more();
+            self.load_more(cx);
         }
         if self.selected + 1 < self.items.len() {
             self.select_index(self.selected + 1, cx);
@@ -199,6 +262,81 @@ impl LexVaultGui {
     fn move_up(&mut self, cx: &mut Context<Self>) {
         if self.selected > 0 {
             self.select_index(self.selected - 1, cx);
+        }
+    }
+
+    fn handle_responses(&mut self, responses: Vec<Response>, cx: &mut Context<Self>) {
+        let mut notify = false;
+        for response in responses {
+            match response {
+                Response::Search {
+                    query_epoch,
+                    append,
+                    result,
+                } => {
+                    if query_epoch != self.query_epoch {
+                        continue;
+                    }
+                    if append {
+                        self.loading_more = false;
+                    } else {
+                        self.loading_search = false;
+                    }
+                    match result {
+                        Ok(page) => {
+                            if append {
+                                let before = self.items.len();
+                                self.items.extend(page.items);
+                                self.cursor = page.next_cursor;
+                                self.exhausted = page.exhausted;
+                                if self.items.len() == before && !page.exhausted {
+                                    self.status = "分页查询没有取得新词条".to_owned();
+                                    self.exhausted = true;
+                                }
+                            } else {
+                                self.items = page.items;
+                                self.cursor = page.next_cursor;
+                                self.exhausted = page.exhausted;
+                                self.selected = 0;
+                                self.entry = None;
+                                if !self.items.is_empty() {
+                                    self.select_index(0, cx);
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            self.status = error;
+                            self.exhausted = true;
+                        }
+                    }
+                }
+                Response::Lookup {
+                    selection_epoch,
+                    result,
+                } => {
+                    if selection_epoch != self.selection_epoch {
+                        continue;
+                    }
+                    match result {
+                        Ok(Some(entry)) => {
+                            self.entry = Some(entry);
+                            self.status.clear();
+                        }
+                        Ok(None) => {
+                            self.entry = None;
+                            self.status = "无法读取所选词条".to_owned();
+                        }
+                        Err(error) => {
+                            self.entry = None;
+                            self.status = error;
+                        }
+                    }
+                }
+            }
+            notify = true;
+        }
+        if notify {
+            cx.notify();
         }
     }
 
@@ -328,7 +466,7 @@ impl LexVaultGui {
                             .done(self.exhausted)
                             .on_more(move |_, cx| {
                                 more.update(cx, |this, cx| {
-                                    this.load_more();
+                                    this.load_more(cx);
                                     cx.notify();
                                 });
                             }),
@@ -436,7 +574,7 @@ impl LexVaultGui {
 impl Render for LexVaultGui {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = cx.theme().colors.clone();
-        let setup = self.dictionary.is_none();
+        let setup = self.worker.is_none();
         let history = self.history.clone();
         let search = SearchInput::new("lexvault-search", &self.search).history(history);
         let body = if setup {
