@@ -1,3 +1,5 @@
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 mod app;
 
 use ely_core::{
@@ -43,6 +45,7 @@ fn main() {
                     traffic_light_position: Some(point(px(16.0), px(18.0))),
                 }),
                 window_min_size: Some(size(px(820.0), px(560.0))),
+                app_owns_titlebar_drag: true,
                 ..Default::default()
             };
 

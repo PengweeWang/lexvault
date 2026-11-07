@@ -4,9 +4,12 @@ use ely_core::{
     layout::{Card, CardHeader, Page, Panel, ScrollArea},
     lists::{InfiniteList, ListItem},
     primitives::FocusScope,
+    shell::TitleBar,
     theme::{ActiveTheme, Radius},
     typography::{Caption, Heading, Label, Paragraph},
 };
+#[cfg(target_os = "windows")]
+use ely_core::{buttons::IconButton, primitives::IconName};
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
     ParentElement, Render, StatefulInteractiveElement, Styled, Subscription, Window, div,
@@ -35,6 +38,8 @@ pub(crate) struct LexVaultGui {
     entry: Option<Entry>,
     status: String,
     history: Vec<String>,
+    #[cfg(target_os = "windows")]
+    always_on_top: bool,
     _search_events: Subscription,
 }
 
@@ -65,6 +70,8 @@ impl LexVaultGui {
             entry: None,
             status: String::new(),
             history: Vec::new(),
+            #[cfg(target_os = "windows")]
+            always_on_top: false,
             _search_events: search_events,
         };
         this.open_dictionary();
@@ -214,6 +221,18 @@ impl LexVaultGui {
         self.move_up(cx);
     }
 
+    #[cfg(target_os = "windows")]
+    fn toggle_always_on_top(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let next = !self.always_on_top;
+        if set_always_on_top(window, next) {
+            self.always_on_top = next;
+            self.status.clear();
+        } else {
+            self.status = "无法切换窗口置顶状态".to_owned();
+        }
+        cx.notify();
+    }
+
     fn render_setup(&self, cx: &mut Context<Self>) -> AnyElement {
         let retry = cx.entity();
         let error = self
@@ -258,11 +277,13 @@ impl LexVaultGui {
         } else {
             format!("预选 · {}+", self.items.len())
         };
-        let body = if self.query.is_empty() {
-            div().size_full().into_any_element()
+        let theme = cx.theme();
+        let list = if self.query.is_empty() {
+            div().flex_1().min_h_0().into_any_element()
         } else if self.items.is_empty() {
             div()
-                .size_full()
+                .flex_1()
+                .min_h_0()
                 .flex()
                 .items_center()
                 .justify_center()
@@ -296,7 +317,8 @@ impl LexVaultGui {
             let more = app;
             div()
                 .id("candidate-scroll")
-                .size_full()
+                .flex_1()
+                .w_full()
                 .min_h_0()
                 .overflow_y_scroll()
                 .child(
@@ -315,11 +337,31 @@ impl LexVaultGui {
                 .into_any_element()
         };
 
-        Panel::new(title)
+        div()
             .w(px(340.0))
             .flex_1()
             .min_h_0()
-            .child(body)
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .rounded(theme.radius(Radius::Md))
+            .border_1()
+            .border_color(theme.colors.border)
+            .bg(theme.colors.surface)
+            .child(
+                div()
+                    .flex_none()
+                    .h(px(38.0))
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .border_b_1()
+                    .border_color(theme.colors.border)
+                    .text_size(theme.text_size(ely_core::theme::TextSize::Sm))
+                    .text_color(theme.colors.fg_muted)
+                    .child(title),
+            )
+            .child(list)
             .into_any_element()
     }
 
@@ -392,7 +434,9 @@ impl LexVaultGui {
 }
 
 impl Render for LexVaultGui {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(target_os = "windows")]
+        let window = _window;
         let colors = cx.theme().colors.clone();
         let setup = self.dictionary.is_none();
         let history = self.history.clone();
@@ -423,6 +467,32 @@ impl Render for LexVaultGui {
                 .into_any_element()
         };
 
+        #[allow(unused_mut)]
+        let mut title_bar = TitleBar::new("lexvault-titlebar").title("LexVault");
+        #[cfg(target_os = "windows")]
+        {
+            let app = cx.entity();
+            let always_on_top = self.always_on_top;
+            title_bar = title_bar.action(
+                IconButton::new(
+                    "always-on-top",
+                    if always_on_top {
+                        IconName::PinOff
+                    } else {
+                        IconName::Pin
+                    },
+                )
+                .tooltip(if always_on_top {
+                    "取消置顶"
+                } else {
+                    "窗口置顶"
+                })
+                .on_click(move |_, window, cx| {
+                    app.update(cx, |this, cx| this.toggle_always_on_top(window, cx));
+                }),
+            );
+        }
+
         div()
             .size_full()
             .key_context(KEY_CONTEXT)
@@ -436,8 +506,41 @@ impl Render for LexVaultGui {
                     .flex_col()
                     .bg(colors.bg)
                     .text_color(colors.fg)
-                    .child(body),
+                    .child(title_bar)
+                    .child(div().flex_1().min_h_0().child(body)),
             )
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn set_always_on_top(window: &Window, enabled: bool) -> bool {
+    use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos,
+    };
+
+    let Ok(handle) = window.window_handle() else {
+        return false;
+    };
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return false;
+    };
+    let insert_after = if enabled {
+        HWND_TOPMOST
+    } else {
+        HWND_NOTOPMOST
+    };
+    let hwnd = handle.hwnd.get() as *mut core::ffi::c_void;
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            insert_after,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        ) != 0
     }
 }
 

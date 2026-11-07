@@ -125,6 +125,11 @@ CLI and TUI. Typing immediately loads the first result. Select another result
 with `Up`/`Down`, `Ctrl+N`/`Ctrl+P`, or a mouse click. Result pages load as the
 list reaches its end.
 
+On Windows the GUI starts without a console window and draws its own title bar
+with minimize, maximize and close controls. The pin button toggles
+always-on-top. The candidate column and definition column both scroll with the
+mouse wheel.
+
 If the database is missing, the window shows the converter command and exact
 destination path instead of exiting silently. After adding the database, press
 “重新检查” to open it without restarting.

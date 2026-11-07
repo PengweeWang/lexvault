@@ -3175,7 +3175,7 @@ checksum = "7a79a3332a6609480d7d0c9eab957bca6b455b91bb84e66d19f5ff66294b85b8"
 
 [[package]]
 name = "lexvault-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "crossterm",
@@ -3186,7 +3186,7 @@ dependencies = [
 
 [[package]]
 name = "lexvault-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "directories",
  "rusqlite",
@@ -3198,17 +3198,19 @@ dependencies = [
 
 [[package]]
 name = "lexvault-gui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ely-core",
  "gpui-pre",
  "gpui-pre-platform",
  "lexvault-core",
+ "raw-window-handle",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
 name = "lexvault-youdao-convert"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "encoding_rs",

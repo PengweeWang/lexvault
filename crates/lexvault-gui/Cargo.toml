@@ -1,6 +1,6 @@
 [package]
 name = "lexvault-gui"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -14,3 +14,10 @@ ely-core.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
 lexvault-core = { path = "../lexvault-core" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+raw-window-handle = "0.6"
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+] }
