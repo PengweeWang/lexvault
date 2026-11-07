@@ -1,0 +1,16 @@
+[package]
+name = "lexvault-gui"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "lexvault-gui"
+path = "src/main.rs"
+
+[dependencies]
+ely-core.workspace = true
+gpui.workspace = true
+gpui_platform.workspace = true
+lexvault-core = { path = "../lexvault-core" }

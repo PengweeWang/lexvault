@@ -1,0 +1,18 @@
+[package]
+name = "lexvault-cli"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "lexvault"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+crossterm.workspace = true
+lexvault-core = { path = "../lexvault-core" }
+ratatui.workspace = true
+thiserror.workspace = true
+

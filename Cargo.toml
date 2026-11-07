@@ -1,0 +1,34 @@
+[workspace]
+members = [
+    "crates/lexvault-core",
+    "crates/lexvault-cli",
+    "crates/lexvault-gui",
+    "crates/lexvault-youdao-convert",
+]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
+repository = "https://github.com/pengweewang/lexvault"
+
+[workspace.dependencies]
+clap = { version = "4", features = ["derive"] }
+crossterm = "0.28"
+directories = "6"
+ely-core = { git = "https://github.com/ELY-Open-Source/Ely-GPUI-Components", rev = "e0f355ac1a669c24336244bcaa8131f7f0e4f1b5", features = ["runtime_shaders"] }
+gpui = { package = "gpui-pre", version = "=0.3.11", default-features = false }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", features = ["font-kit", "wayland", "x11"] }
+ratatui = "0.29"
+rusqlite = { version = "0.41.1", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+strsim = "0.11"
+tempfile = "3"
+thiserror = "2"
+encoding_rs = "0.8"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

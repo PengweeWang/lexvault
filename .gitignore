@@ -1,0 +1,12 @@
+/target/
+/.lexvault-data/
+/.agents/
+/.aws/
+/.codex/
+/.tools/
+/temp/
+*.part
+*.db
+*.db-shm
+*.db-wal
+*.db-journal

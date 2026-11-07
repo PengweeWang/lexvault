@@ -1,0 +1,121 @@
+name: Windows CI and release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build Windows ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - arch: arm64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.1
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Test workspace
+        if: matrix.arch == 'x64'
+        run: cargo test --workspace --locked
+
+      - name: Build release binaries
+        run: >
+          cargo build --release --locked
+          --target ${{ matrix.target }}
+          -p lexvault-cli
+          -p lexvault-gui
+          -p lexvault-youdao-convert
+
+      - name: Package release
+        id: package
+        shell: pwsh
+        run: |
+          $version = if ("${{ github.event_name }}" -eq "push") {
+            "${{ github.ref_name }}"
+          } else {
+            "snapshot-${{ github.sha }}"
+          }
+          $archive = "lexvault-$version-windows-${{ matrix.arch }}.zip"
+          $stageName = "lexvault-$version-windows-${{ matrix.arch }}"
+          $stage = Join-Path $env:RUNNER_TEMP $stageName
+          $output = Join-Path "target" "${{ matrix.target }}\release"
+
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          New-Item -ItemType Directory -Force -Path $stage\docs | Out-Null
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+
+          Copy-Item "$output\lexvault.exe" $stage
+          Copy-Item "$output\lexvault-gui.exe" $stage
+          Copy-Item "$output\lexvault-youdao-convert.exe" $stage
+          Copy-Item -Path README.md, LICENSE -Destination $stage
+          Copy-Item -Path docs\*.md -Destination $stage\docs
+
+          Compress-Archive -Path "$stage\*" -DestinationPath "dist\$archive"
+          "archive=$archive" >> $env:GITHUB_OUTPUT
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.arch }}
+          path: dist/${{ steps.package.outputs.archive }}
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Windows packages
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: windows-*
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: dist
+        run: sha256sum ./*.zip > SHA256SUMS.txt
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
