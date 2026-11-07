@@ -5,7 +5,7 @@ mod worker;
 
 use ely_core::{
     Assets,
-    theme::{Mode, Theme},
+    theme::{Density, Mode, Theme},
 };
 use gpui::{
     App, AppContext, Bounds, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions, actions,
@@ -25,6 +25,7 @@ fn main() {
             }
 
             Theme::set_mode_now(Mode::Dark, cx);
+            Theme::update(cx, |theme| theme.density = Density::Compact);
             cx.bind_keys([
                 KeyBinding::new("cmd-q", Quit, None),
                 KeyBinding::new("ctrl-q", Quit, None),
@@ -37,7 +38,7 @@ fn main() {
             ]);
             cx.on_action(|_: &Quit, cx| cx.quit());
 
-            let bounds = Bounds::centered(None, size(px(1120.0), px(760.0)), cx);
+            let bounds = Bounds::centered(None, size(px(760.0), px(520.0)), cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
@@ -45,7 +46,7 @@ fn main() {
                     appears_transparent: true,
                     traffic_light_position: Some(point(px(16.0), px(18.0))),
                 }),
-                window_min_size: Some(size(px(820.0), px(560.0))),
+                window_min_size: Some(size(px(600.0), px(380.0))),
                 app_owns_titlebar_drag: true,
                 ..Default::default()
             };

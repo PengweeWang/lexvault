@@ -132,6 +132,10 @@ mouse wheel. Dictionary searches and definition reads run on a dedicated
 background thread so typing never waits for SQLite; stale responses from older
 keystrokes are discarded.
 
+The definition text can be selected with the mouse and copied with Ctrl+C.
+The copy button in the definition header copies the complete entry. The
+default window and controls use Ely's compact density for a smaller layout.
+
 If the database is missing, the window shows the converter command and exact
 destination path instead of exiting silently. After adding the database, press
 “重新检查” to open it without restarting.

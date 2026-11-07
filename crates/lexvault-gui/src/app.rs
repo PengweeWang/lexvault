@@ -3,18 +3,18 @@ use std::{
     time::Duration,
 };
 
+#[cfg(target_os = "windows")]
+use ely_core::{buttons::IconButton, primitives::IconName};
 use ely_core::{
-    buttons::Button,
+    buttons::{Button, CopyButton},
     forms::{InputEvent, SearchInput, TextInput},
     layout::{Card, CardHeader, Page, Panel, ScrollArea},
     lists::{InfiniteList, ListItem},
     primitives::FocusScope,
     shell::TitleBar,
-    theme::{ActiveTheme, Radius},
-    typography::{Caption, Heading, Label, Paragraph},
+    theme::{ActiveTheme, ControlSize, Radius, TextSize},
+    typography::{Caption, Heading, Label, Paragraph, SelectableText},
 };
-#[cfg(target_os = "windows")]
-use ely_core::{buttons::IconButton, primitives::IconName};
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
     ParentElement, Render, StatefulInteractiveElement, Styled, Subscription, Task, Window, div,
@@ -29,7 +29,7 @@ use crate::{
 
 pub(crate) const KEY_CONTEXT: &str = "LexVault";
 pub(crate) const SEARCH_CONTEXT: &str = "ElyInput";
-const PAGE_SIZE: usize = 80;
+const PAGE_SIZE: usize = 40;
 const MAX_HISTORY: usize = 20;
 
 pub(crate) struct LexVaultGui {
@@ -476,7 +476,7 @@ impl LexVaultGui {
         };
 
         div()
-            .w(px(340.0))
+            .w(px(280.0))
             .flex_1()
             .min_h_0()
             .flex()
@@ -489,13 +489,13 @@ impl LexVaultGui {
             .child(
                 div()
                     .flex_none()
-                    .h(px(38.0))
-                    .px_3()
+                    .h(px(30.0))
+                    .px_2()
                     .flex()
                     .items_center()
                     .border_b_1()
                     .border_color(theme.colors.border)
-                    .text_size(theme.text_size(ely_core::theme::TextSize::Sm))
+                    .text_size(theme.text_size(TextSize::Xs))
                     .text_color(theme.colors.fg_muted)
                     .child(title),
             )
@@ -511,8 +511,8 @@ impl LexVaultGui {
                 div()
                     .flex()
                     .items_end()
-                    .gap_3()
-                    .child(Heading::h2(entry.word.clone()))
+                    .gap_2()
+                    .child(Heading::h3(entry.word.clone()))
                     .children(entry.phonetic.as_ref().map(|phonetic| {
                         Caption::new(format!("/{phonetic}/")).text_color(theme.colors.fg_muted)
                     }))
@@ -520,17 +520,25 @@ impl LexVaultGui {
             );
 
             if let Some(translation) = non_empty(entry.translation.as_deref()) {
-                blocks.push(text_content(translation, cx));
+                blocks.push(selectable_content(
+                    ("definition-translation", entry.id as u64),
+                    translation,
+                    cx,
+                ));
             }
             if let Some(definition) = non_empty(entry.definition.as_deref()) {
-                blocks.push(text_content(definition, cx));
+                blocks.push(selectable_content(
+                    ("definition-body", entry.id as u64),
+                    definition,
+                    cx,
+                ));
             }
             if let Some(exchange) = non_empty(entry.exchange.as_deref()) {
-                blocks.push(
-                    Caption::new(format!("词形：{exchange}"))
-                        .text_color(theme.colors.fg_muted)
-                        .into_any_element(),
-                );
+                blocks.push(selectable_content(
+                    ("definition-forms", entry.id as u64),
+                    &format!("词形：{exchange}"),
+                    cx,
+                ));
             }
             if blocks.len() == 1 {
                 blocks.push(
@@ -542,8 +550,8 @@ impl LexVaultGui {
             div()
                 .flex()
                 .flex_col()
-                .gap_5()
-                .p_5()
+                .gap_3()
+                .p_3()
                 .children(blocks)
                 .into_any_element()
         } else {
@@ -557,10 +565,14 @@ impl LexVaultGui {
                 .into_any_element()
         };
 
-        Panel::new("释义")
-            .flex_1()
-            .h_full()
-            .min_h_0()
+        let mut panel = Panel::new("释义").flex_1().h_full().min_h_0();
+        if let Some(entry) = &self.entry {
+            panel = panel.action(CopyButton::new(
+                ("copy-definition", entry.id as u64),
+                entry_copy_text(entry),
+            ));
+        }
+        panel
             .child(
                 ScrollArea::new("definition-scroll")
                     .vertical()
@@ -576,23 +588,25 @@ impl Render for LexVaultGui {
         let colors = cx.theme().colors.clone();
         let setup = self.worker.is_none();
         let history = self.history.clone();
-        let search = SearchInput::new("lexvault-search", &self.search).history(history);
+        let search = SearchInput::new("lexvault-search", &self.search)
+            .history(history)
+            .size(ControlSize::Sm);
         let body = if setup {
             self.render_setup(cx)
         } else {
             div()
                 .size_full()
                 .flex()
-                .gap_4()
-                .p_4()
+                .gap_2()
+                .p_2()
                 .child(
                     div()
-                        .w(px(340.0))
+                        .w(px(280.0))
                         .h_full()
                         .min_h_0()
                         .flex()
                         .flex_col()
-                        .gap_3()
+                        .gap_2()
                         .child(search)
                         .when(!self.status.is_empty(), |left| {
                             left.child(Caption::new(self.status.clone()).text_color(colors.danger))
@@ -684,24 +698,65 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
 
-fn text_content(text: &str, cx: &App) -> AnyElement {
+fn selectable_content(id: impl Into<gpui::ElementId>, text: &str, cx: &App) -> AnyElement {
     let theme = cx.theme();
-    let lines = text
-        .lines()
-        .map(|line| {
-            if line.trim().is_empty() {
-                div().h(px(6.0)).into_any_element()
-            } else {
-                Paragraph::new(line.to_owned()).into_any_element()
-            }
-        })
-        .collect::<Vec<_>>();
     div()
         .flex()
         .flex_col()
-        .gap_1()
-        .line_height(relative(1.6))
+        .line_height(relative(1.5))
+        .text_size(theme.text_size(TextSize::Base))
         .text_color(theme.colors.fg)
-        .children(lines)
+        .child(SelectableText::new(id, text.to_owned()))
         .into_any_element()
+}
+
+fn entry_copy_text(entry: &Entry) -> String {
+    let mut text = entry.word.clone();
+    if let Some(phonetic) = non_empty(entry.phonetic.as_deref()) {
+        text.push_str(&format!("\n/{phonetic}/"));
+    }
+    if let Some(translation) = non_empty(entry.translation.as_deref()) {
+        text.push_str("\n\n");
+        text.push_str(translation);
+    }
+    if let Some(definition) = non_empty(entry.definition.as_deref()) {
+        text.push_str("\n\n");
+        text.push_str(definition);
+    }
+    if let Some(exchange) = non_empty(entry.exchange.as_deref()) {
+        text.push_str("\n\n词形：");
+        text.push_str(exchange);
+    }
+    text
+}
+
+#[cfg(test)]
+mod tests {
+    use lexvault_core::Entry;
+
+    use super::entry_copy_text;
+
+    #[test]
+    fn copied_entry_contains_readable_definition_text() {
+        let entry = Entry {
+            id: 1,
+            word: "catabolize".to_owned(),
+            phonetic: Some("kə'tæbəlaiz".to_owned()),
+            definition: None,
+            translation: Some("使发生分解代谢".to_owned()),
+            pos: None,
+            collins: 0,
+            oxford: 0,
+            tags: None,
+            bnc: None,
+            frq: None,
+            exchange: Some("过去式：catabolized".to_owned()),
+            detail: None,
+            audio: None,
+        };
+        assert_eq!(
+            entry_copy_text(&entry),
+            "catabolize\n/kə'tæbəlaiz/\n\n使发生分解代谢\n\n词形：过去式：catabolized"
+        );
+    }
 }
